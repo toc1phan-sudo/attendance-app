@@ -25,22 +25,16 @@ function Badges({ flags }) {
   })}</>
 }
 
-// ── QR SVG ───────────────────────────────────────────────────────────────────
-function QRDisplay({ code, size=180 }) {
-  const cells = 21, cell = size/cells
-  const seed = code.split('').reduce((a,c)=>a*31+c.charCodeAt(0),7)>>>0
-  const rng = i => { let x=Math.sin(seed+i)*99999; return x-Math.floor(x) }
-  const grid = Array.from({length:cells},(_,r)=>Array.from({length:cells},(_,c)=>rng(r*cells+c)>0.48))
-  ;[[0,0],[0,cells-7],[cells-7,0]].forEach(([fr,fc])=>{
-    for(let r=0;r<7;r++) for(let c=0;c<7;c++)
-      grid[fr+r][fc+c]=r===0||r===6||c===0||c===6||(r>=2&&r<=4&&c>=2&&c<=4)
-  })
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{display:'block'}}>
-      <rect width={size} height={size} fill="white" rx="6"/>
-      {grid.map((row,r)=>row.map((on,c)=>on?<rect key={`${r}-${c}`} x={c*cell} y={r*cell} width={cell} height={cell} fill="#111" rx="1"/>:null))}
-    </svg>
-  )
+// ── QR thật — encode URL attend?session=CODE ─────────────────────────────────
+function QRDisplay({ code, size=200 }) {
+  const [src, setSrc] = useState('')
+  useEffect(() => {
+    if (!code) return
+    const url = `${window.location.origin}/attend?session=${encodeURIComponent(code)}`
+    setSrc(`https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}&bgcolor=ffffff&color=111111&qzone=1`)
+  }, [code, size])
+  if (!src) return <div style={{width:size,height:size,background:'#f3f4f6',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',color:'#aaa',fontSize:12}}>Đang tạo QR…</div>
+  return <img src={src} width={size} height={size} alt={`QR ${code}`} style={{display:'block',borderRadius:8}}/>
 }
 
 // ── Manual Note Modal ────────────────────────────────────────────────────────
