@@ -5,122 +5,115 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 )
 
-// Haversine distance in meters
-function haversineM(lat1, lng1, lat2, lng2) {
-  const R = 6371000
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLng = (lng2 - lng1) * Math.PI / 180
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+function haversineM(lat1,lng1,lat2,lng2){
+  const R=6371000,dLat=(lat2-lat1)*Math.PI/180,dLng=(lng2-lng1)*Math.PI/180
+  const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a))
 }
-function median(arr) {
-  if (!arr.length) return 0
-  const s = [...arr].sort((a,b)=>a-b), m = Math.floor(s.length/2)
-  return s.length%2 ? s[m] : (s[m-1]+s[m])/2
+function median(arr){
+  if(!arr.length)return 0
+  const s=[...arr].sort((a,b)=>a-b),m=Math.floor(s.length/2)
+  return s.length%2?s[m]:(s[m-1]+s[m])/2
 }
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
-
   const { qr_code, name, mssv, gps_granted, lat, lng, gps_accuracy, fingerprint } = req.body
-  if (!qr_code || !name || !mssv) return res.status(400).json({ ok: false, reason: 'Thiếu thông tin' })
+  if (!name || !mssv) return res.status(400).json({ ok:false, reason:'Thiếu thông tin' })
+  if (!qr_code) return res.status(400).json({ ok:false, reason:'Thiếu mã phiên' })
 
-  // 1. Tìm phiên theo mã QR
-  const { data: session, error: sessErr } = await supabaseAdmin
-    .from('sessions')
-    .select('id, created_at, active')
-    .eq('qr_code', qr_code)
-    .single()
-
-  if (sessErr || !session) return res.status(400).json({ ok: false, reason: 'Mã QR không hợp lệ' })
-  if (!session.active) return res.status(400).json({ ok: false, reason: 'Phiên điểm danh đã kết thúc' })
-
-  const elapsed_sec = Math.round((Date.now() - new Date(session.created_at).getTime()) / 1000)
+  const now = Date.now()
   const flags = []
+  let expired_qr = false
+  let session = null
 
-  // 2. Không GPS
+  // Tìm phiên active với mã QR này
+  const { data: activeSession } = await supabaseAdmin
+    .from('sessions').select('id,created_at,active,qr_code')
+    .eq('qr_code', qr_code).eq('active', true).single()
+
+  if (activeSession) {
+    session = activeSession
+  } else {
+    // Tìm phiên đã hết hạn (mã QR cũ)
+    const { data: expiredSession } = await supabaseAdmin
+      .from('sessions').select('id,created_at,active,qr_code')
+      .eq('qr_code', qr_code).single()
+
+    if (!expiredSession) return res.status(400).json({ ok:false, reason:'Mã QR không hợp lệ. Hãy nhập mã mới từ màn hình chiếu.' })
+
+    // Kiểm tra xem có phiên active nào cùng lesson không
+    const { data: sameLesson } = await supabaseAdmin
+      .from('sessions').select('id,created_at,lesson_id')
+      .eq('lesson_id', expiredSession.lesson_id || '').eq('active', true).single()
+
+    if (!sameLesson) return res.status(400).json({ ok:false, reason:'Phiên điểm danh đã kết thúc.' })
+
+    // Cho điểm danh vào phiên active, nhưng flag expired_qr
+    session = sameLesson
+    expired_qr = true
+    flags.push('expired-qr')
+  }
+
+  const elapsed_sec = Math.round((now - new Date(session.created_at).getTime()) / 1000)
+
+  // Kiểm tra đã điểm danh trong buổi này chưa (tất cả sessions cùng lesson)
+  const { data: sessionsSameLesson } = await supabaseAdmin
+    .from('sessions').select('id')
+    .eq('lesson_id', (await supabaseAdmin.from('sessions').select('lesson_id').eq('id',session.id).single()).data?.lesson_id || '')
+
+  if (sessionsSameLesson?.length) {
+    const ids = sessionsSameLesson.map(s=>s.id)
+    const { data: alreadyIn } = await supabaseAdmin
+      .from('attendances').select('id').eq('mssv', mssv).in('session_id', ids).limit(1)
+    if (alreadyIn?.length)
+      return res.status(400).json({ ok:false, reason:'Bạn đã điểm danh buổi này rồi.' })
+  }
+
+  // GPS checks
   if (!gps_granted) flags.push('no-gps')
-
-  // 3. GPS outlier — so sánh với trung vị cả lớp, cần ≥5 SV có GPS
   if (gps_granted && lat && lng) {
     const { data: existing } = await supabaseAdmin
-      .from('attendances')
-      .select('lat, lng')
-      .eq('session_id', session.id)
-      .eq('gps_granted', true)
-      .not('lat', 'is', null)
-
-    if (existing && existing.length >= 5) {
-      const medLat = median(existing.map(r => r.lat))
-      const medLng = median(existing.map(r => r.lng))
-      const dist = haversineM(lat, lng, medLat, medLng)
+      .from('attendances').select('lat,lng').eq('session_id', session.id).eq('gps_granted',true).not('lat','is',null)
+    if (existing?.length >= 5) {
+      const dist = haversineM(lat, lng, median(existing.map(r=>r.lat)), median(existing.map(r=>r.lng)))
       if (dist > 200) flags.push('gps-outlier')
     }
   }
 
-  // 4. Trễ
-  if (elapsed_sec > 60) flags.push('late')
+  // Trễ
+  if (elapsed_sec > 60 && !expired_qr) flags.push('late')
 
-  // 5. Device fingerprint trùng trong phiên
+  // Device fingerprint
   if (fingerprint) {
     const { data: sameDevice } = await supabaseAdmin
-      .from('attendances')
-      .select('mssv, name')
-      .eq('session_id', session.id)
-      .eq('fingerprint', fingerprint)
-      .neq('mssv', mssv)
-      .limit(1)
-
-    if (sameDevice && sameDevice.length > 0) {
+      .from('attendances').select('id,flags,mssv')
+      .eq('session_id', session.id).eq('fingerprint', fingerprint).neq('mssv', mssv).limit(1)
+    if (sameDevice?.length) {
       flags.push('device-reuse')
-      // Đánh dấu sinh viên trước đó
-      const { data: prevRow } = await supabaseAdmin
-        .from('attendances')
-        .select('id, flags')
-        .eq('session_id', session.id)
-        .eq('fingerprint', fingerprint)
-        .limit(1)
-      if (prevRow && prevRow.length > 0) {
-        const prevFlags = prevRow[0].flags || []
-        if (!prevFlags.includes('device-shared')) {
-          await supabaseAdmin
-            .from('attendances')
-            .update({ flags: [...prevFlags, 'device-shared'] })
-            .eq('id', prevRow[0].id)
-        }
-      }
+      const prev = sameDevice[0]
+      const prevFlags = prev.flags||[]
+      if (!prevFlags.includes('device-shared'))
+        await supabaseAdmin.from('attendances').update({ flags:[...prevFlags,'device-shared'] }).eq('id', prev.id)
     }
-
-    // 6. Nộp nhanh < 90s cùng thiết bị
-    const ninetySecsAgo = new Date(Date.now() - 90000).toISOString()
-    const { data: rapidSub } = await supabaseAdmin
-      .from('attendances')
-      .select('mssv')
-      .eq('fingerprint', fingerprint)
-      .neq('mssv', mssv)
-      .gte('submitted_at', ninetySecsAgo)
-      .limit(1)
-
-    if (rapidSub && rapidSub.length > 0 && !flags.includes('device-reuse')) {
-      flags.push('device-rapid')
-    }
+    const ninetyAgo = new Date(now-90000).toISOString()
+    const { data: rapid } = await supabaseAdmin
+      .from('attendances').select('mssv').eq('fingerprint', fingerprint)
+      .neq('mssv', mssv).gte('submitted_at', ninetyAgo).limit(1)
+    if (rapid?.length && !flags.includes('device-reuse')) flags.push('device-rapid')
   }
 
-  // 7. Lưu vào DB
-  const { error: insertErr } = await supabaseAdmin
-    .from('attendances')
-    .insert({
-      session_id: session.id,
-      name, mssv, gps_granted,
-      lat: lat || null,
-      lng: lng || null,
-      gps_accuracy: gps_accuracy || null,
-      fingerprint: fingerprint || null,
-      elapsed_sec,
-      flags,
-    })
+  // Xác định status ban đầu
+  const status = flags.length > 0 ? 'pending' : 'valid'
 
-  if (insertErr) return res.status(500).json({ ok: false, reason: 'Lỗi server, thử lại' })
+  const { error } = await supabaseAdmin.from('attendances').insert({
+    session_id: session.id,
+    name, mssv, gps_granted,
+    lat: lat||null, lng: lng||null, gps_accuracy: gps_accuracy||null,
+    fingerprint: fingerprint||null,
+    elapsed_sec, flags, expired_qr, status
+  })
 
-  return res.status(200).json({ ok: true, flags })
+  if (error) return res.status(500).json({ ok:false, reason:'Lỗi server, thử lại' })
+  return res.status(200).json({ ok:true, flags })
 }
