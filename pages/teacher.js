@@ -51,13 +51,14 @@ const STATUS_META = {
   'excused':    {label:'📝 Có phép',  color:'#0369a1',bg:'#e0f2fe'},
 }
 
-function SharedWithNote({sharedWith, flags}){
-  if(!sharedWith) return null
-  const hasShare = (flags||[]).some(f=>['device-reuse','device-shared','device-rapid'].includes(f))
-  if(!hasShare) return null
+function SharedWithNote({flags}){
+  // Tên người dùng chung được encode trong flags: "shared-with:TênSV"
+  const sharedFlag = (flags||[]).find(f=>f.startsWith('shared-with:'))
+  if(!sharedFlag) return null
+  const sharedName = sharedFlag.replace('shared-with:','')
   return(
     <div style={{fontSize:11,color:'#9d174d',marginTop:3,display:'flex',alignItems:'center',gap:4}}>
-      📱 Dùng chung với <strong>{lastName(sharedWith)}</strong>
+      📱 Dùng chung với <strong>{lastName(sharedName)}</strong>
     </div>
   )
 }
@@ -297,7 +298,7 @@ function LessonHistory({lesson, cls, password, onBack}){
               <div style={{fontSize:13,fontWeight:600}}>{a.name}</div>
               <div style={{fontSize:11,color:'#888',marginBottom:3}}>{a.mssv} • {fmtDateTime(a.submitted_at)}</div>
               <div style={{display:'flex',flexWrap:'wrap',gap:2}}><Badges flags={a.flags}/></div>
-              <SharedWithNote sharedWith={a.shared_with} flags={a.flags}/>
+              <SharedWithNote flags={a.flags}/>
               {a.manual_note&&<div style={{fontSize:11,color:'#0369a1',marginTop:2}}>📝 {a.manual_note}</div>}
             </div>
             <StatusBadge status={a.status}/>
@@ -540,7 +541,7 @@ export default function TeacherPage(){
                         <div style={{fontSize:13,fontWeight:600,marginBottom:2}}>{sv.name}</div>
                         <div style={{fontSize:11,color:'#888',marginBottom:3}}>{sv.mssv} • {fmtTime(sv.elapsed_sec||0)}</div>
                         <div style={{display:'flex',flexWrap:'wrap',gap:2}}><Badges flags={sv.flags}/></div>
-                        <SharedWithNote sharedWith={sv.shared_with} flags={sv.flags}/>
+                        <SharedWithNote flags={sv.flags}/>
                         {sv.manual_note&&<div style={{fontSize:11,color:'#0369a1',marginTop:2}}>📝 {sv.manual_note}</div>}
                       </div>
                       <StatusBadge status={sv.status}/>
