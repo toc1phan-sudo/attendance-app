@@ -85,22 +85,30 @@ export default async function handler(req, res) {
   if (elapsed_sec > 60 && !expired_qr) flags.push('late')
 
   // Device fingerprint
+  let sharedWithName = null
   if (fingerprint) {
     const { data: sameDevice } = await supabaseAdmin
-      .from('attendances').select('id,flags,mssv')
+      .from('attendances').select('id,flags,mssv,name,status')
       .eq('session_id', session.id).eq('fingerprint', fingerprint).neq('mssv', mssv).limit(1)
     if (sameDevice?.length) {
-      flags.push('device-reuse')
       const prev = sameDevice[0]
+      sharedWithName = prev.name  // lưu tên SV dùng chung để ghi vào flag
+      flags.push('device-reuse')
+      // Cập nhật SV trước: thêm flag device-shared + set pending
       const prevFlags = prev.flags||[]
-      if (!prevFlags.includes('device-shared'))
-        await supabaseAdmin.from('attendances').update({ flags:[...prevFlags,'device-shared'] }).eq('id', prev.id)
+      const newPrevFlags = prevFlags.includes('device-shared') ? prevFlags : [...prevFlags,'device-shared']
+      await supabaseAdmin.from('attendances')
+        .update({ flags: newPrevFlags, status: 'pending', shared_with: name })
+        .eq('id', prev.id)
     }
     const ninetyAgo = new Date(now-90000).toISOString()
     const { data: rapid } = await supabaseAdmin
-      .from('attendances').select('mssv').eq('fingerprint', fingerprint)
+      .from('attendances').select('mssv,name').eq('fingerprint', fingerprint)
       .neq('mssv', mssv).gte('submitted_at', ninetyAgo).limit(1)
-    if (rapid?.length && !flags.includes('device-reuse')) flags.push('device-rapid')
+    if (rapid?.length && !flags.includes('device-reuse')) {
+      flags.push('device-rapid')
+      sharedWithName = sharedWithName || rapid[0].name
+    }
   }
 
   // Xác định status ban đầu
@@ -111,7 +119,8 @@ export default async function handler(req, res) {
     name, mssv, gps_granted,
     lat: lat||null, lng: lng||null, gps_accuracy: gps_accuracy||null,
     fingerprint: fingerprint||null,
-    elapsed_sec, flags, expired_qr, status
+    elapsed_sec, flags, expired_qr, status,
+    shared_with: sharedWithName||null
   })
 
   if (error) return res.status(500).json({ ok:false, reason:'Lỗi server, thử lại' })
