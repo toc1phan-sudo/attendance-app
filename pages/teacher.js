@@ -5,6 +5,30 @@ import { supabase } from '../lib/supabase'
 function fmtTime(sec){return sec<60?`${sec}g`:`${Math.floor(sec/60)}p${sec%60}g`}
 function initials(name){return name.trim().split(' ').slice(-2).map(w=>w[0]).join('').toUpperCase()}
 function fmtDate(d){return new Date(d).toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric'})}
+function lastName(fullName){
+  // Tên người VN: từ cuối cùng là tên, VD "Nguyễn Văn An" → "An"
+  if(!fullName)return ''
+  const parts = fullName.trim().split(/\s+/)
+  return parts[parts.length-1]
+}
+function sortAttendances(list, sortBy){
+  const copy = [...list]
+  const STATUS_ORDER = {valid:0,pending:1,absent:2,suspicious:3,excused:4}
+  const FLAG_ORDER = f => {
+    if(f.includes('no-gps')||f.includes('gps-outlier')) return 0
+    if(f.includes('device-reuse')||f.includes('device-shared')||f.includes('device-rapid')) return 1
+    if(f.includes('late')||f.includes('expired-qr')) return 2
+    return 3
+  }
+  if(sortBy==='status') return copy.sort((a,b)=>{
+    const fa=FLAG_ORDER(a.flags||[]), fb=FLAG_ORDER(b.flags||[])
+    if(fa!==fb)return fa-fb
+    return (STATUS_ORDER[a.status||'pending']||0)-(STATUS_ORDER[b.status||'pending']||0)
+  })
+  if(sortBy==='name') return copy.sort((a,b)=>lastName(a.name).localeCompare(lastName(b.name),'vi'))
+  if(sortBy==='mssv') return copy.sort((a,b)=>(a.mssv||'').localeCompare(b.mssv||''))
+  return copy // default: thời gian điểm danh (mới nhất lên đầu)
+}
 function fmtDateTime(d){return new Date(d).toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
 
 const FLAG_META = {
@@ -25,6 +49,17 @@ const STATUS_META = {
   'absent':     {label:'❌ Vắng',     color:'#b91c1c',bg:'#fee2e2'},
   'suspicious': {label:'🔍 Xem xét', color:'#9d174d',bg:'#fce7f3'},
   'excused':    {label:'📝 Có phép',  color:'#0369a1',bg:'#e0f2fe'},
+}
+
+function SharedWithNote({sharedWith, flags}){
+  if(!sharedWith) return null
+  const hasShare = (flags||[]).some(f=>['device-reuse','device-shared','device-rapid'].includes(f))
+  if(!hasShare) return null
+  return(
+    <div style={{fontSize:11,color:'#9d174d',marginTop:3,display:'flex',alignItems:'center',gap:4}}>
+      📱 Dùng chung với <strong>{lastName(sharedWith)}</strong>
+    </div>
+  )
 }
 
 function Badges({flags}){
@@ -172,6 +207,7 @@ function LessonHistory({lesson, cls, password, onBack}){
   const[sessions,setSessions]=useState([])
   const[loading,setLoading]=useState(true)
   const[editTarget,setEditTarget]=useState(null)
+  const[sortBy,setSortBy]=useState('time')
   const realtimeRef=useRef(null)
 
   const load=useCallback(async()=>{
@@ -198,7 +234,7 @@ function LessonHistory({lesson, cls, password, onBack}){
   attendances.forEach(a=>{
     if(!map[a.mssv]||new Date(a.submitted_at)>new Date(map[a.mssv].submitted_at))map[a.mssv]=a
   })
-  const merged=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name))
+  const merged=sortAttendances(Object.values(map), sortBy)
   const counts={valid:0,pending:0,absent:0,suspicious:0,excused:0}
   merged.forEach(a=>{ if(counts[a.status]!==undefined)counts[a.status]++ })
 
@@ -239,7 +275,16 @@ function LessonHistory({lesson, cls, password, onBack}){
 
       {/* List */}
       <div style={{background:'#fff',borderRadius:16,padding:'1rem',boxShadow:'0 1px 6px rgba(0,0,0,0.06)'}}>
-        <div style={{fontSize:12,color:'#888',fontWeight:600,marginBottom:10}}>DANH SÁCH ({merged.length} sinh viên) • Nhấn để đổi trạng thái</div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,flexWrap:'wrap',gap:6}}>
+          <div style={{fontSize:12,color:'#888',fontWeight:600}}>DANH SÁCH ({merged.length} sinh viên)</div>
+          <select value={sortBy} onChange={e=>setSortBy(e.target.value)}
+            style={{fontSize:12,padding:'4px 8px',borderRadius:6,border:'1px solid #ddd',background:'#fafafa'}}>
+            <option value="time">Sắp xếp: Thời gian</option>
+            <option value="status">Sắp xếp: Trạng thái / Cờ</option>
+            <option value="name">Sắp xếp: Tên (A→Z)</option>
+            <option value="mssv">Sắp xếp: MSSV</option>
+          </select>
+        </div>
         {loading&&<div style={{textAlign:'center',padding:'2rem',color:'#aaa'}}>Đang tải…</div>}
         {!loading&&!merged.length&&<div style={{textAlign:'center',padding:'2rem',color:'#ccc',fontSize:13}}>Chưa có sinh viên điểm danh</div>}
         {merged.map((a,i)=>(
@@ -252,6 +297,7 @@ function LessonHistory({lesson, cls, password, onBack}){
               <div style={{fontSize:13,fontWeight:600}}>{a.name}</div>
               <div style={{fontSize:11,color:'#888',marginBottom:3}}>{a.mssv} • {fmtDateTime(a.submitted_at)}</div>
               <div style={{display:'flex',flexWrap:'wrap',gap:2}}><Badges flags={a.flags}/></div>
+              <SharedWithNote sharedWith={a.shared_with} flags={a.flags}/>
               {a.manual_note&&<div style={{fontSize:11,color:'#0369a1',marginTop:2}}>📝 {a.manual_note}</div>}
             </div>
             <StatusBadge status={a.status}/>
@@ -288,6 +334,7 @@ export default function TeacherPage(){
   const[newClass,setNewClass]=useState({name:'',code:'',term:''})
   const[newLesson,setNewLesson]=useState({lesson_no:'',label:'',date:new Date().toISOString().slice(0,10)})
   const[detail,setDetail]=useState(null)
+  const[liveSort,setLiveSort]=useState('time')
   const timerRef=useRef(null)
   const realtimeRef=useRef(null)
 
@@ -472,9 +519,18 @@ export default function TeacherPage(){
                 </div>
 
                 <div style={{background:'#fff',borderRadius:16,padding:'1rem',boxShadow:'0 2px 12px rgba(0,0,0,0.06)'}}>
-                  <div style={{fontSize:12,color:'#888',fontWeight:600,marginBottom:10}}>DANH SÁCH ({present}) • Nhấn để xem chi tiết</div>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,flexWrap:'wrap',gap:6}}>
+                    <div style={{fontSize:12,color:'#888',fontWeight:600}}>DANH SÁCH ({present})</div>
+                    <select value={liveSort} onChange={e=>setLiveSort(e.target.value)}
+                      style={{fontSize:12,padding:'4px 8px',borderRadius:6,border:'1px solid #ddd',background:'#fafafa'}}>
+                      <option value="time">Thời gian</option>
+                      <option value="status">Trạng thái</option>
+                      <option value="name">Tên</option>
+                      <option value="mssv">MSSV</option>
+                    </select>
+                  </div>
                   {!present&&<div style={{textAlign:'center',padding:'2rem',color:'#ccc',fontSize:13}}>Chưa có sinh viên điểm danh</div>}
-                  {attendances.map((sv,i)=>(
+                  {sortAttendances(attendances, liveSort).map((sv,i)=>(
                     <div key={sv.id||i} onClick={()=>setDetail(sv)}
                       style={{display:'flex',alignItems:'flex-start',gap:10,padding:'10px 0',borderBottom:'1px solid #f5f5f5',cursor:'pointer'}}>
                       <div style={{width:32,height:32,borderRadius:'50%',flexShrink:0,background:sv.flags?.length?'#fce7f3':'#dcfce7',color:sv.flags?.length?'#9d174d':'#166534',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700}}>
@@ -484,6 +540,7 @@ export default function TeacherPage(){
                         <div style={{fontSize:13,fontWeight:600,marginBottom:2}}>{sv.name}</div>
                         <div style={{fontSize:11,color:'#888',marginBottom:3}}>{sv.mssv} • {fmtTime(sv.elapsed_sec||0)}</div>
                         <div style={{display:'flex',flexWrap:'wrap',gap:2}}><Badges flags={sv.flags}/></div>
+                        <SharedWithNote sharedWith={sv.shared_with} flags={sv.flags}/>
                         {sv.manual_note&&<div style={{fontSize:11,color:'#0369a1',marginTop:2}}>📝 {sv.manual_note}</div>}
                       </div>
                       <StatusBadge status={sv.status}/>
