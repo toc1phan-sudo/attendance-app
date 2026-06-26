@@ -18,6 +18,7 @@ function median(arr){
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
+  try {
   const { qr_code, name, mssv, gps_granted, lat, lng, gps_accuracy, fingerprint } = req.body
   if (!name || !mssv) return res.status(400).json({ ok:false, reason:'Thiếu thông tin' })
   if (!qr_code) return res.status(400).json({ ok:false, reason:'Thiếu mã phiên' })
@@ -128,6 +129,9 @@ export default async function handler(req, res) {
     shared_with: sharedWithName||null
   })
 
-  if (error) return res.status(500).json({ ok:false, reason:'Lỗi server, thử lại' })
+  if (error) return res.status(500).json({ ok:false, reason:'DB error: ' + error.message })
   return res.status(200).json({ ok:true, flags })
+  } catch(e) {
+    return res.status(500).json({ ok:false, reason:'Exception: ' + e.message })
+  }
 }
