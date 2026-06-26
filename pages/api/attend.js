@@ -57,17 +57,22 @@ export default async function handler(req, res) {
 
   const elapsed_sec = Math.round((now - new Date(session.created_at).getTime()) / 1000)
 
-  // Kiểm tra đã điểm danh trong buổi này chưa (tất cả sessions cùng lesson)
-  const { data: sessionsSameLesson } = await supabaseAdmin
-    .from('sessions').select('id')
-    .eq('lesson_id', (await supabaseAdmin.from('sessions').select('lesson_id').eq('id',session.id).single()).data?.lesson_id || '')
+  // Lấy lesson_id của session hiện tại
+  const { data: sessionInfo } = await supabaseAdmin
+    .from('sessions').select('lesson_id').eq('id', session.id).single()
+  const lessonId = sessionInfo?.lesson_id || null
 
-  if (sessionsSameLesson?.length) {
-    const ids = sessionsSameLesson.map(s=>s.id)
-    const { data: alreadyIn } = await supabaseAdmin
-      .from('attendances').select('id').eq('mssv', mssv).in('session_id', ids).limit(1)
-    if (alreadyIn?.length)
-      return res.status(400).json({ ok:false, reason:'Bạn đã điểm danh buổi này rồi.' })
+  // Kiểm tra đã điểm danh trong buổi này chưa (tất cả sessions cùng lesson)
+  if (lessonId) {
+    const { data: sessionsSameLesson } = await supabaseAdmin
+      .from('sessions').select('id').eq('lesson_id', lessonId)
+    if (sessionsSameLesson?.length) {
+      const ids = sessionsSameLesson.map(s=>s.id)
+      const { data: alreadyIn } = await supabaseAdmin
+        .from('attendances').select('id').eq('mssv', mssv).in('session_id', ids).limit(1)
+      if (alreadyIn?.length)
+        return res.status(400).json({ ok:false, reason:'Bạn đã điểm danh buổi này rồi.' })
+    }
   }
 
   // GPS checks
