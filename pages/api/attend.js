@@ -103,8 +103,11 @@ export default async function handler(req, res) {
       // Cập nhật SV trước: thêm flag device-shared + set pending
       const prevFlags = prev.flags||[]
       const newPrevFlags = prevFlags.includes('device-shared') ? prevFlags : [...prevFlags,'device-shared']
+      // Thêm tên người dùng chung vào flags của SV trước
+      const newPrevFlagsWithName = newPrevFlags.filter(f=>!f.startsWith('shared-with:'))
+      newPrevFlagsWithName.push('shared-with:' + name)
       await supabaseAdmin.from('attendances')
-        .update({ flags: newPrevFlags, status: 'pending', shared_with: name })
+        .update({ flags: newPrevFlagsWithName, status: 'pending' })
         .eq('id', prev.id)
     }
     const ninetyAgo = new Date(now-90000).toISOString()
@@ -120,13 +123,18 @@ export default async function handler(req, res) {
   // Xác định status ban đầu
   const status = flags.length > 0 ? 'pending' : 'valid'
 
+  // Encode shared_with name into flags array as "shared-with:TênSV"
+  // (tránh lỗi schema cache với cột shared_with mới)
+  if (sharedWithName) {
+    flags.push('shared-with:' + sharedWithName)
+  }
+
   const { error } = await supabaseAdmin.from('attendances').insert({
     session_id: session.id,
     name, mssv, gps_granted,
     lat: lat||null, lng: lng||null, gps_accuracy: gps_accuracy||null,
     fingerprint: fingerprint||null,
-    elapsed_sec, flags, expired_qr, status,
-    shared_with: sharedWithName||null
+    elapsed_sec, flags, expired_qr, status
   })
 
   if (error) return res.status(500).json({ ok:false, reason:'DB error: ' + error.message })
