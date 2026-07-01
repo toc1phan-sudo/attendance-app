@@ -30,7 +30,7 @@ export default async function handler(req, res) {
 
   // Tìm phiên active với mã QR này
   const { data: activeSession } = await supabaseAdmin
-    .from('sessions').select('id,created_at,active,qr_code')
+    .from('sessions').select('id,created_at,active,qr_code,duration_sec')
     .eq('qr_code', qr_code).eq('active', true).single()
 
   if (activeSession) {
@@ -87,8 +87,9 @@ export default async function handler(req, res) {
     }
   }
 
-  // Trễ
-  if (elapsed_sec > 60 && !expired_qr) flags.push('late')
+  // Trễ — tính theo duration_sec của session (giáo viên tự set)
+  const duration = session.duration_sec || 60
+  if (elapsed_sec > duration && !expired_qr) flags.push('late')
 
   // Device fingerprint
   let sharedWithName = null
